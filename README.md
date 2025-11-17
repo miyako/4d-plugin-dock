@@ -6,6 +6,9 @@
 # 4d-plugin-dock
 update of [4d-plugin-dock-tile](https://github.com/miyako/4d-plugin-dock-tile)
 
+## New Commands
+
 ```4d
 Dock SET METHOD("onDock")
+$method:=Dock Get method
 ```
