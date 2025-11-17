@@ -438,7 +438,11 @@ static void Dock_SET_METHOD(PA_PluginParameters params) {
             DOCK::LISTENER_METHOD.fromParamAtIndex(pParams, 1);
         }
         
-        swizzle_on();
+        if(DOCK::LISTENER_METHOD.getUTF16Length() != 0) {
+            swizzle_on();
+        }else{
+            swizzle_off();
+        }
     }
 }
 
