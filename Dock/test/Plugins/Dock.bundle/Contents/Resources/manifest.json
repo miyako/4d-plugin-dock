@@ -1,0 +1,46 @@
+{
+    "name": "Dock",
+    "id": 20000,
+    "commands": [
+        {
+            "theme": "Dock",
+            "syntax": "Dock SET METHOD(&T)",
+            "threadSafe": true
+        },
+        {
+            "theme": "Dock",
+            "syntax": "Dock Get method:T",
+            "threadSafe": true
+        },
+        {
+            "theme": "Dock",
+            "syntax": "DOCK SET BADGE(&T)",
+            "threadSafe": true
+        },
+        {
+            "theme": "Dock",
+            "syntax": "DOCK Get badge:T",
+            "threadSafe": true
+        },
+        {
+            "theme": "Dock",
+            "syntax": "DOCK Bounce(&L):L",
+            "threadSafe": true
+        },
+        {
+            "theme": "Dock",
+            "syntax": "DOCK CANCEL BOUNCE(&L)",
+            "threadSafe": true
+        },
+        {
+            "theme": "Dock",
+            "syntax": "DOCK SET ICON(&P)",
+            "threadSafe": true
+        },
+        {
+            "theme": "Dock",
+            "syntax": "DOCK Get icon:P",
+            "threadSafe": true
+        }
+    ]
+}
