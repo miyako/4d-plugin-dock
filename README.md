@@ -1,2 +1,2 @@
 # 4d-plugin-dock
-v2
+update of [4d-plugin-dock-tile](https://github.com/miyako/4d-plugin-dock-tile)
