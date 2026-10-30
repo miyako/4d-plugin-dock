@@ -5,7 +5,7 @@
  #	Project : Dock
  #	author : miyako
  #	2025/11/17
- #  
+ #
  # --------------------------------------------------------------------------------*/
 
 #ifndef PLUGIN_DOCK_H
@@ -15,10 +15,10 @@
 #include "C_TEXT.h"
 
 #include <mutex>
+#include <atomic>
 #import <objc/runtime.h>
 #import <AppKit/AppKit.h>
 
-void listenerInit(void);
 void listenerLoop(void);
 void listenerLoopStart(void);
 void listenerLoopFinish(void);
@@ -31,11 +31,10 @@ typedef PA_long32 method_id_t;
 typedef PA_Unichar* process_name_t;
 typedef PA_long32 event_id_t;
 
-@interface
-
-Swizzle_MainApplication_Class : NSObject <NSApplicationDelegate>
+/* Objective-C class names are process-global: keep this prefix unique to this plugin. */
+@interface DockPlugin_ReopenHook : NSObject
 {
-    
+
 }
 @end
 
@@ -49,7 +48,5 @@ void DOCK_Bounce(PA_PluginParameters params);
 void DOCK_CANCEL_BOUNCE(PA_PluginParameters params);
 void DOCK_SET_ICON(PA_PluginParameters params);
 void DOCK_Get_icon(PA_PluginParameters params);
-
-
 
 #endif /* PLUGIN_DOCK_H */

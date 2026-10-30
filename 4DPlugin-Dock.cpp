@@ -5,317 +5,261 @@
  #	Project : Dock
  #	author : miyako
  #	2025/11/17
- #  
+ #
  # --------------------------------------------------------------------------------*/
 
 #include "4DPlugin-Dock.h"
 
-Swizzle_MainApplication_Class *swizzle_MainApplication = nil;
+DockPlugin_ReopenHook *swizzle_MainApplication = nil;
 
-#define CALLBACK_IN_NEW_PROCESS 0
 #define CALLBACK_SLEEP_TIME 59
 
-std::mutex globalMutex; /* for INSERT_RECORDS,UPDATE_RECORDS,DELETE_RECORDS */
-std::mutex globalMutex1;/* for METHOD_PROCESS_ID */
-std::mutex globalMutex2;/* for LISTENER_METHOD */
-std::mutex globalMutex3;/* PROCESS_SHOULD_TERMINATE */
-std::mutex globalMutex4;/* PROCESS_SHOULD_RESUME */
+std::mutex globalMutex; /* CALLBACK_EVENT_IDS */
+std::mutex globalMutex2;/* LISTENER_METHOD */
+std::mutex globalMutex3;/* swizzle_MainApplication */
 
 namespace DOCK
 {
     //constants
-process_name_t MONITOR_PROCESS_NAME = (PA_Unichar *)"D\0O\0C\0K\0_\0N\0O\0T\0I\0F\0I\0C\0A\0T\0I\0O\0N\0\0\0";
+    process_name_t MONITOR_PROCESS_NAME = (PA_Unichar *)u"DOCK_NOTIFICATION";
     process_stack_size_t MONITOR_PROCESS_STACK_SIZE = 0;
-      
+
     //context management
     std::vector<event_id_t>CALLBACK_EVENT_IDS;
 
     //callback management
     C_TEXT LISTENER_METHOD;
-    process_number_t METHOD_PROCESS_ID = 0;
-    bool PROCESS_SHOULD_TERMINATE = false;
-    bool PROCESS_SHOULD_RESUME = false;
+    std::atomic<bool> LOOP_ACTIVE(false);
+    std::atomic<bool> PROCESS_SHOULD_TERMINATE(false);
+    std::atomic<bool> PROCESS_SHOULD_RESUME(false);
 }
 
 #pragma mark -
 
-static void generateUuid(C_TEXT &returnValue) {
-    
-#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 1080
-    returnValue.setUTF16String([[[NSUUID UUID]UUIDString]stringByReplacingOccurrencesOfString:@"-" withString:@""]);
-#else
-    CFUUIDRef uuid = CFUUIDCreate(kCFAllocatorDefault);
-    NSString *uuid_str = (NSString *)CFUUIDCreateString(kCFAllocatorDefault, uuid);
-    returnValue.setUTF16String([uuid_str stringByReplacingOccurrencesOfString:@"-" withString:@""]);
-#endif
+static bool hasPendingEvents() {
+    std::lock_guard<std::mutex> lock(globalMutex);
+    return !DOCK::CALLBACK_EVENT_IDS.empty();
+}
+
+static bool popEvent(event_id_t &event) {
+    std::lock_guard<std::mutex> lock(globalMutex);
+    if(DOCK::CALLBACK_EVENT_IDS.empty())
+        return false;
+    event = DOCK::CALLBACK_EVENT_IDS.front() - 1;
+    DOCK::CALLBACK_EVENT_IDS.erase(DOCK::CALLBACK_EVENT_IDS.begin());
+    return true;
 }
 
 void listenerLoop() {
-    
-    if(1)
-    {
-        std::lock_guard<std::mutex> lock(globalMutex3);
-        
-        DOCK::PROCESS_SHOULD_TERMINATE = false;
-    }
-    
+
     /* Current process returns 0 for PA_NewProcess */
     PA_long32 currentProcessNumber = PA_GetCurrentProcessNumber();
-    
-    while(!PA_IsProcessDying())
+
+    for(;;)
     {
         PA_YieldAbsolute();
-        
-        bool PROCESS_SHOULD_RESUME;
-        bool PROCESS_SHOULD_TERMINATE;
-        
-        if(1)
+
+        if(PA_IsProcessDying())
         {
-            PROCESS_SHOULD_RESUME = DOCK::PROCESS_SHOULD_RESUME;
-            PROCESS_SHOULD_TERMINATE = DOCK::PROCESS_SHOULD_TERMINATE;
+            DOCK::LOOP_ACTIVE = false;
+            break;
         }
-        
-        if(PROCESS_SHOULD_RESUME)
+
+        if(DOCK::PROCESS_SHOULD_RESUME.exchange(false))
         {
-            size_t EVENT_IDS;
-            
-            if(1)
-            {
-                std::lock_guard<std::mutex> lock(globalMutex);
-                
-                EVENT_IDS = DOCK::CALLBACK_EVENT_IDS.size();
-            }
-            
-            while(EVENT_IDS)
+            while(hasPendingEvents())
             {
                 PA_YieldAbsolute();
-                
-                if(CALLBACK_IN_NEW_PROCESS)
-                {
-                    C_TEXT processName;
-                    generateUuid(processName);
-                    PA_NewProcess((void *)listenerLoopExecuteMethod,
-                                  DOCK::MONITOR_PROCESS_STACK_SIZE,
-                                  (PA_Unichar *)processName.getUTF16StringPtr());
-                }else
-                {
-                     listenerLoopExecuteMethod();
-                }
-                
-                if(PROCESS_SHOULD_TERMINATE)
+
+                listenerLoopExecuteMethod();
+
+                if(DOCK::PROCESS_SHOULD_TERMINATE || PA_IsProcessDying())
                     break;
-                
-                if(1)
-                {
-                    std::lock_guard<std::mutex> lock(globalMutex);
-                    
-                    EVENT_IDS = DOCK::CALLBACK_EVENT_IDS.size();
-                    PROCESS_SHOULD_TERMINATE = DOCK::PROCESS_SHOULD_TERMINATE;
-                }
             }
-            
-            if(1)
-            {
-                std::lock_guard<std::mutex> lock(globalMutex4);
-                
-                DOCK::PROCESS_SHOULD_RESUME = false;
-            }
-            
         }else
         {
             PA_PutProcessToSleep(currentProcessNumber, CALLBACK_SLEEP_TIME);
         }
-        
-        if(1)
+
+        if(DOCK::PROCESS_SHOULD_TERMINATE)
         {
-            PROCESS_SHOULD_TERMINATE = DOCK::PROCESS_SHOULD_TERMINATE;
-        }
-        
-        if(PROCESS_SHOULD_TERMINATE)
+            DOCK::LOOP_ACTIVE = false;
+            /* listenerLoopStart() may have cancelled the stop request just now; reclaim the loop unless a new one was started. */
+            if(!DOCK::PROCESS_SHOULD_TERMINATE)
+            {
+                bool expected = false;
+                if(DOCK::LOOP_ACTIVE.compare_exchange_strong(expected, true))
+                    continue;
+            }
             break;
-    }
-    
-    if(1)
-    {
-        std::lock_guard<std::mutex> lock(globalMutex);
-        
-        DOCK::CALLBACK_EVENT_IDS.clear();
-    }
-    
-    if(1)
-    {
-        std::lock_guard<std::mutex> lock(globalMutex2);
-        
-        DOCK::LISTENER_METHOD.setUTF16String((PA_Unichar *)"\0\0", 0);
+        }
     }
 
     if(1)
     {
-        std::lock_guard<std::mutex> lock(globalMutex1);
-        
-        DOCK::METHOD_PROCESS_ID = 0;
+        std::lock_guard<std::mutex> lock(globalMutex);
+
+        DOCK::CALLBACK_EVENT_IDS.clear();
     }
-    
+
     PA_KillProcess();
 }
 
 void listenerLoopStart() {
-    
-    if(!DOCK::METHOD_PROCESS_ID)
+
+    /* a new start cancels any pending stop request */
+    DOCK::PROCESS_SHOULD_TERMINATE = false;
+
+    bool expected = false;
+    if(DOCK::LOOP_ACTIVE.compare_exchange_strong(expected, true))
     {
-        std::lock_guard<std::mutex> lock(globalMutex1);
-        
-        DOCK::METHOD_PROCESS_ID = PA_NewProcess((void *)listenerLoop,
-                                              DOCK::MONITOR_PROCESS_STACK_SIZE,
-                                              DOCK::MONITOR_PROCESS_NAME);
+        process_number_t processNumber = PA_NewProcess((void *)listenerLoop,
+                                                       DOCK::MONITOR_PROCESS_STACK_SIZE,
+                                                       DOCK::MONITOR_PROCESS_NAME);
+        if(!processNumber)
+        {
+            DOCK::LOOP_ACTIVE = false;
+        }
     }
 }
 
 void listenerLoopFinish() {
-    
-    if(DOCK::METHOD_PROCESS_ID)
-    {
-        if(1)
-        {
-            std::lock_guard<std::mutex> lock(globalMutex3);
-            
-            DOCK::PROCESS_SHOULD_TERMINATE = true;
-        }
-        
-        PA_YieldAbsolute();
-        
-        if(1)
-        {
-            std::lock_guard<std::mutex> lock(globalMutex4);
 
-            DOCK::PROCESS_SHOULD_RESUME = true;
-        }
+    if(DOCK::LOOP_ACTIVE)
+    {
+        DOCK::PROCESS_SHOULD_TERMINATE = true;
+
+        PA_YieldAbsolute();
+
+        DOCK::PROCESS_SHOULD_RESUME = true;
     }
 }
 
 void listenerLoopExecute() {
-    
-    if(1)
-    {
-        std::lock_guard<std::mutex> lock(globalMutex3);
-        
-        DOCK::PROCESS_SHOULD_TERMINATE = false;
-    }
-    
-    if(1)
-    {
-        std::lock_guard<std::mutex> lock(globalMutex4);
-        
-        DOCK::PROCESS_SHOULD_RESUME = true;
-    }
 
+    DOCK::PROCESS_SHOULD_RESUME = true;
 }
 
 void listenerLoopExecuteMethod() {
-    
-    std::vector<event_id_t>::iterator e = DOCK::CALLBACK_EVENT_IDS.begin();
-    event_id_t event = (*e) - 1;
-    
-    method_id_t methodId = PA_GetMethodID((PA_Unichar *)DOCK::LISTENER_METHOD.getUTF16StringPtr());
-    
+
+    event_id_t event;
+    if(!popEvent(event))
+        return;
+
+    /* take a private copy of the method name; the C_TEXT may be reassigned by Dock SET METHOD at any time */
+    CUTF16String methodName;
+    if(1)
+    {
+        std::lock_guard<std::mutex> lock(globalMutex2);
+
+        const PA_Unichar *p = DOCK::LISTENER_METHOD.getUTF16StringPtr();
+        if(p)
+            methodName = p;
+    }
+
+    if(methodName.empty())
+        return;
+
+    method_id_t methodId = PA_GetMethodID((PA_Unichar *)methodName.c_str());
+
     if(methodId)
     {
         PA_Variable    params[1];
         params[0] = PA_CreateVariable(eVK_Longint);
         PA_SetLongintVariable(&params[0], event);
 
-        DOCK::CALLBACK_EVENT_IDS.erase(e);
-        
         PA_ExecuteMethodByID(methodId, params, 0);
-        
+
         PA_ClearVariable(&params[0]);
     }else{
         PA_Variable    params[2];
         params[1] = PA_CreateVariable(eVK_Longint);
         PA_SetLongintVariable(&params[1], event);
-        
+
         params[0] = PA_CreateVariable(eVK_Unistring);
-        PA_Unistring method = PA_CreateUnistring((PA_Unichar *)DOCK::LISTENER_METHOD.getUTF16StringPtr());
+        PA_Unistring method = PA_CreateUnistring((PA_Unichar *)methodName.c_str());
         PA_SetStringVariable(&params[0], &method);
-        
-        DOCK::CALLBACK_EVENT_IDS.erase(e);
-        
+
         PA_ExecuteCommandByID(1007, params, 1);
-        
+
         PA_ClearVariable(&params[0]);
         PA_ClearVariable(&params[1]);
     }
-    
+
 }
 
-BOOL __swiz_applicationShouldHandleReopen_hasVisibleWindows(id,SEL,NSApplication*,BOOL) {
-    
-    if(1)
+#pragma mark -
+
+/* The hook is installed once per process and never removed (an Objective-C method cannot be deleted).
+   Instead it is gated by g_hookEnabled; when disabled it forwards to the original implementation. */
+static std::atomic<bool> g_hookEnabled(false);
+static bool g_hookInstalled = false;
+static IMP g_origImp = NULL;
+
+static BOOL dockPluginHandleReopen(id self, SEL _cmd, NSApplication *app, BOOL flag) {
+
+    if(g_hookEnabled)
     {
-        std::lock_guard<std::mutex> lock(globalMutex);
-        
-        DOCK::CALLBACK_EVENT_IDS.push_back(1);
+        if(1)
+        {
+            std::lock_guard<std::mutex> lock(globalMutex);
+
+            DOCK::CALLBACK_EVENT_IDS.push_back(1);
+        }
+
+        listenerLoopExecute();
+
+        return false;
     }
-    
-    listenerLoopExecute();
-    
-    return false;
+
+    if(g_origImp)
+    {
+        return ((BOOL (*)(id, SEL, NSApplication *, BOOL))g_origImp)(self, _cmd, app, flag);
+    }
+
+    return true; /* AppKit default: allow reopen handling */
 }
 
-static IMP __orig_imp_applicationShouldHandleReopen_hasVisibleWindows;
-IMP __swiz_imp_applicationShouldHandleReopen_hasVisibleWindows = (IMP)__swiz_applicationShouldHandleReopen_hasVisibleWindows;
-
-@implementation Swizzle_MainApplication_Class
+@implementation DockPlugin_ReopenHook
 
 - (id)init
 {
     if(!(self = [super init])) return self;
-        
-    Class MainApplicationDelegateClass = NSClassFromString(@"XMacApplicationDelegate");
 
-    if(MainApplicationDelegateClass)
+    if(!g_hookInstalled)
     {
-        Method m = class_getInstanceMethod(MainApplicationDelegateClass, @selector(applicationShouldHandleReopen:hasVisibleWindows:));
-        
-        const char *types = m ? method_getTypeEncoding(m) : "c@:@@";
-        // BOOL return, id, SEL, id, BOOL
+        Class MainApplicationDelegateClass = NSClassFromString(@"XMacApplicationDelegate");
 
-        BOOL added = class_addMethod(MainApplicationDelegateClass,
-                                     @selector(applicationShouldHandleReopen:hasVisibleWindows:),
-                                     __swiz_imp_applicationShouldHandleReopen_hasVisibleWindows,
-                                     types);
-        if (!added) {
-            __orig_imp_applicationShouldHandleReopen_hasVisibleWindows =
-            method_setImplementation(m, __swiz_imp_applicationShouldHandleReopen_hasVisibleWindows);
-        }else{
-            __orig_imp_applicationShouldHandleReopen_hasVisibleWindows = NULL;
+        if(MainApplicationDelegateClass)
+        {
+            SEL sel = @selector(applicationShouldHandleReopen:hasVisibleWindows:);
+            Method m = class_getInstanceMethod(MainApplicationDelegateClass, sel);
+
+            char fallbackTypes[16];
+            snprintf(fallbackTypes, sizeof(fallbackTypes), "%s@:@%s", @encode(BOOL), @encode(BOOL));
+            const char *types = m ? method_getTypeEncoding(m) : fallbackTypes;
+
+            /* capture the existing (possibly inherited) implementation before replacing it */
+            g_origImp = m ? method_getImplementation(m) : NULL;
+
+            class_replaceMethod(MainApplicationDelegateClass, sel, (IMP)dockPluginHandleReopen, types);
+
+            g_hookInstalled = true;
         }
     }
-    
+
+    g_hookEnabled = true;
+
     return self;
 }
 
 - (void)dealloc
 {
-    Class MainApplicationDelegateClass = NSClassFromString(@"XMacApplicationDelegate");
-    
-    if(MainApplicationDelegateClass)
-    {
-        if(__orig_imp_applicationShouldHandleReopen_hasVisibleWindows) {
-            Method m = class_getInstanceMethod(MainApplicationDelegateClass, @selector(applicationShouldHandleReopen:hasVisibleWindows:));
-            
-            method_setImplementation(m, __orig_imp_applicationShouldHandleReopen_hasVisibleWindows);
-        }else{
-            //do nothing
-        }
-    }
+    g_hookEnabled = false;
+
     [super dealloc];
 }
 
-- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
-    
-    return false;
-}
 @end
 
 #define MAX_PROCESS_NAME 256
@@ -323,30 +267,38 @@ IMP __swiz_imp_applicationShouldHandleReopen_hasVisibleWindows = (IMP)__swiz_app
 bool IsProcessOnExit()
 {
     std::vector<PA_Unichar> name(MAX_PROCESS_NAME);
-    
+
     PA_long32 state, time;
-    
+
     PA_GetProcessInfo(PA_GetCurrentProcessNumber(), &name[0], &state, &time);
     CUTF16String procName(&name[0]);
-    CUTF16String exitProcName((PA_Unichar *)"$\0x\0x\0\0\0");
+    CUTF16String exitProcName((PA_Unichar *)u"$xx");
     return (!procName.compare(exitProcName));
 }
 
 void swizzle_on()
 {
-    if(!swizzle_MainApplication)
-    {
-        swizzle_MainApplication = [[Swizzle_MainApplication_Class alloc]init];
+    @autoreleasepool {
+        std::lock_guard<std::mutex> lock(globalMutex3);
+
+        if(!swizzle_MainApplication)
+        {
+            swizzle_MainApplication = [[DockPlugin_ReopenHook alloc]init];
+        }
     }
     listenerLoopStart();
 }
 
 void swizzle_off()
 {
-    if(swizzle_MainApplication)
-    {
-        [swizzle_MainApplication release];
-        swizzle_MainApplication = nil;
+    @autoreleasepool {
+        std::lock_guard<std::mutex> lock(globalMutex3);
+
+        if(swizzle_MainApplication)
+        {
+            [swizzle_MainApplication release];
+            swizzle_MainApplication = nil;
+        }
     }
     listenerLoopFinish();
 }
@@ -361,6 +313,9 @@ static void OnExit() {
 }
 
 static void OnCloseProcess() {
+    if(!DOCK::LOOP_ACTIVE)
+        return;
+
     if(IsProcessOnExit())
     {
         listenerLoopFinish();
@@ -368,7 +323,7 @@ static void OnCloseProcess() {
 }
 
 void PluginMain(PA_long32 selector, PA_PluginParameters params) {
-    
+
 	try
 	{
         switch(selector)
@@ -384,16 +339,16 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
             case kServerDeinitPlugin :
                 OnExit();
                 break;
-                
+
 			// --- Dock
-            
+
 			case 1 :
 				Dock_SET_METHOD(params);
 				break;
 			case 2 :
 				Dock_Get_method(params);
 				break;
-            
+
             case 3 :
                 PA_RunInMainProcess((PA_RunInMainProcessProcPtr)DOCK_SET_BADGE, params);
                 break;
@@ -412,7 +367,7 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
             case 8 :
                 PA_RunInMainProcess((PA_RunInMainProcessProcPtr)DOCK_Get_icon, params);
                 break;
-                
+
         }
 
 	}
@@ -427,18 +382,20 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
 static void Dock_SET_METHOD(PA_PluginParameters params) {
 
     PackagePtr pParams = (PackagePtr)params->fParameters;
-    C_TEXT Param1;
-    
+
     if(!IsProcessOnExit())
     {
+        bool enable;
+
         if(1)
         {
             std::lock_guard<std::mutex> lock(globalMutex2);
-            
+
             DOCK::LISTENER_METHOD.fromParamAtIndex(pParams, 1);
+            enable = (DOCK::LISTENER_METHOD.getUTF16Length() != 0);
         }
-        
-        if(DOCK::LISTENER_METHOD.getUTF16Length() != 0) {
+
+        if(enable) {
             swizzle_on();
         }else{
             swizzle_off();
@@ -449,9 +406,11 @@ static void Dock_SET_METHOD(PA_PluginParameters params) {
 static void Dock_Get_method(PA_PluginParameters params) {
 
     sLONG_PTR *pResult = (sLONG_PTR *)params->fResult;
-    
+
     if(1)
     {
+        std::lock_guard<std::mutex> lock(globalMutex2);
+
         DOCK::LISTENER_METHOD.setReturn(pResult);
     }
 }
@@ -459,34 +418,39 @@ static void Dock_Get_method(PA_PluginParameters params) {
 void DOCK_Get_icon(PA_PluginParameters params) {
 
     sLONG_PTR *pResult = (sLONG_PTR *)params->fResult;
-    
+
     NSImage * icon = [[NSApplication sharedApplication]applicationIconImage];
-    if(icon) {
+    if(!icon) return;
 
-        NSRect imageRect = NSMakeRect(0, 0,
-                                      icon.size.width,
-                                      icon.size.height);
-        CGImageRef image = [icon CGImageForProposedRect:(NSRect *)&imageRect context:NULL hints:NULL];
-        CFMutableDataRef data = CFDataCreateMutable(kCFAllocatorDefault, 0);
-        CGImageDestinationRef destination = CGImageDestinationCreateWithData(data, kUTTypeTIFF, 1, NULL);
-        CFMutableDictionaryRef properties = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, NULL, NULL);
-        CGImageDestinationAddImage(destination, image, properties);
-        CGImageDestinationFinalize(destination);
-        PA_Picture picture = PA_CreatePicture((void *)CFDataGetBytePtr(data), (PA_long32)CFDataGetLength(data));
-        *(PA_Picture*) pResult = picture;
+    NSRect imageRect = NSMakeRect(0, 0,
+                                  icon.size.width,
+                                  icon.size.height);
+    CGImageRef image = [icon CGImageForProposedRect:(NSRect *)&imageRect context:NULL hints:NULL];
+    if(!image) return;
+
+    CFMutableDataRef data = CFDataCreateMutable(kCFAllocatorDefault, 0);
+    if(!data) return;
+
+    CGImageDestinationRef destination = CGImageDestinationCreateWithData(data, kUTTypeTIFF, 1, NULL);
+    if(destination)
+    {
+        CGImageDestinationAddImage(destination, image, NULL);
+
+        if(CGImageDestinationFinalize(destination) && (CFDataGetLength(data) > 0))
+        {
+            PA_Picture picture = PA_CreatePicture((void *)CFDataGetBytePtr(data), (PA_long32)CFDataGetLength(data));
+            *(PA_Picture*) pResult = picture;
+        }
         CFRelease(destination);
-        CFRelease(properties);
-        CFRelease(data);
-        
     }
-
+    CFRelease(data);
 }
 
 void DOCK_SET_ICON(PA_PluginParameters params) {
 
     PA_Picture p = PA_GetPictureParameter(params, 1);
     CGImageRef cgImage = (CGImageRef)PA_CreateNativePictureForScreen(p);
-    
+
     if(cgImage) {
         NSImage *nsImage = [[NSImage alloc]initWithCGImage:cgImage size:NSZeroSize];
         CFRelease(cgImage);
@@ -499,8 +463,8 @@ void DOCK_SET_ICON(PA_PluginParameters params) {
 
 void DOCK_CANCEL_BOUNCE(PA_PluginParameters params) {
 
-    NSInteger request = (NSRequestUserAttentionType)PA_GetLongParameter(params, 1);
-    
+    NSInteger request = (NSInteger)PA_GetLongParameter(params, 1);
+
     [[NSApplication sharedApplication]cancelUserAttentionRequest:request];
 }
 
@@ -509,6 +473,11 @@ void DOCK_Bounce(PA_PluginParameters params) {
     NSRequestUserAttentionType type = (NSRequestUserAttentionType)PA_GetLongParameter(params, 1);
 
     NSInteger returnValue = [[NSApplication sharedApplication]requestUserAttention:type];
+
+    /* manifest declares "DOCK Bounce(&L):L": return the request identifier as the function result */
+    PA_ReturnLong(params, (PA_long32)returnValue);
+
+    /* legacy behaviour retained: also write it back to parameter 1 */
     PA_SetLongParameter(params, 1, (PA_long32)returnValue);
 }
 
@@ -518,8 +487,12 @@ void DOCK_Get_badge(PA_PluginParameters params) {
 
     sLONG_PTR *pResult = (sLONG_PTR *)params->fResult;
     C_TEXT returnValue;
-    
-    returnValue.setUTF16String([dockTile badgeLabel]);
+
+    NSString *badgeLabel = [dockTile badgeLabel];
+    if(badgeLabel)
+    {
+        returnValue.setUTF16String(badgeLabel);
+    }
     returnValue.setReturn(pResult);
 }
 
@@ -529,9 +502,9 @@ void DOCK_SET_BADGE(PA_PluginParameters params) {
     C_TEXT Param1;
 
     Param1.fromParamAtIndex(pParams, 1);
-    
+
     NSDockTile *dockTile = [NSApp dockTile];
-    
+
     if(Param1.getUTF16Length())
     {
         NSString *badgeLabel = Param1.copyUTF16String();
