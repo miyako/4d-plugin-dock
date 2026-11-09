@@ -15,6 +15,83 @@ Dock is a macOS-only 4D plugin that controls the application's Dock tile through
 
 **Platforms:** macOS only (4D, 4D Server on macOS). The plugin has no Windows implementation.
 
+## Manual versioning and publication
+
+**Bump version** and **Build** are independent manual Actions workflows. Choose
+the branch with GitHub's built-in selector. Bump takes only `patch`, `minor`, or
+`major`; Build has **zero custom inputs**. Neither branch pushes, PRs nor tags
+trigger a native build. No branch-name publication restriction is imposed.
+Every checkout uses the dispatch's immutable `github.sha`.
+
+The original Bump header introduced in `18837da` explicitly coordinated
+`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` and plist versions; that contract
+governs despite its marketing-first implementation. At intake `3388001`, the
+six marketing assignments and source plist short version were `2.0.2`; the
+three current-project assignments and source English display were stale at
+`2.0.1`. This migration repairs only those stale source tokens to `2.0.2`;
+it does not increment the release authority or add the absent `CFBundleVersion`.
+Future literal source versions co-bump. Supported `$(...)` / `${...}` references
+are validated and preserved; missing optional build-version keys remain absent.
+Unknown/cyclic references, noncanonical `X.Y.Z`, duplicates and drift fail before
+any writes. UTF-8 BOM, individual line endings, modes and unrelated bytes survive.
+
+Bump requires a clean checkout of the exact selected remote branch and creates
+one nonempty source-only commit with a single direct parent. Its mandatory
+executable pre-push guard checks the actual advertised old SHA/ref, literal new
+SHA and HEAD, rejecting branch advance, rewind, deletion and same-result races.
+The push is nonforce, explicit, and disables tag following in both Git config
+and push options. Bump never creates tags, releases, builds or dispatches.
+
+Build derives `vX.Y.Z`, `Dock-X.Y.Z.zip` and `Dock-X.Y.Z.dmg` from selected
+source metadata. A repository-wide constant publication concurrency group queues
+all refs without cancellation. Authenticated, fully paginated release checks
+(including drafts) and exact remote tag absence run before native work and again
+after every native gate. API/auth/network/schema errors, including 404, stop
+publication rather than implying absence.
+
+The actual pipeline remains macOS-only: `Dock.xcodeproj`, target `Dock`,
+configuration `Default`, `arm64 x86_64`, deployment override `11.0`. It rebuilds
+only generated executable/plist/localized/signature/intermediate outputs and
+pins the configuration output to `test/Plugins` to avoid a `Default` subfolder.
+It preserves committed resources, framework dependencies and Windows payloads;
+the existing `Dock.vcxproj` v140/Win32/x64 configuration is not run or modified.
+The project resource phases and deployment-only script remain unchanged.
+Architecture checks require exact tokens without inventing slice-count or
+extra-architecture restrictions. Built plist and actual English localization
+(text, UTF-16, XML or binary plist) must match selected source before signing.
+Developer ID signing, strict verification, both successful **Accepted** JSON
+notarizations and DMG stapling are mandatory. Existing secret names are unchanged.
+
+### Publication failure and manual recovery
+
+Publication uses separate create-only operations: POST a new `git/refs` tag at
+the selected SHA, verify that remote tag, POST a **new public, nonprerelease**
+release with explicit tag/name/target/body/flags, then upload ZIP and DMG to the
+new returned release ID with exact filenames. The original empty release body
+and nongenerated-notes behavior are preserved.
+
+There is **no** reuse, PATCH, update, DELETE, clobber, retry or rollback. A race
+or any failed/malformed response stops immediately. A tag, release or earlier
+uploaded asset may already exist and is intentionally retained. Inspect the
+run log, selected SHA, exact tag, release ID and asset list before any manual
+decision; never assume a failed response means no remote mutation happened.
+Re-running Build for that occupied version will fail, not finish or replace it.
+Resolve partial publication manually under maintainer review, or choose a new
+source version with Bump and independently run Build. Never automatically delete
+or retag an existing version.
+
+Offline regression checks (no real native build or GitHub mutation):
+
+```sh
+actionlint
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/tests -v
+```
+
+Tests adapt the pinned Native Encoding Detection, File Information, Common
+String Algorithm, Window Button, Raw Picture Data and PRNG workflow safeguards
+to Dock's actual source layout and macOS-only pipeline. Native workflow run
+blocks execute only against closed-PATH stubs; no real Apple tools or 4D run.
+
 ---
 
 ## Requirements & platform notes
