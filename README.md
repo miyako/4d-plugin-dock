@@ -94,6 +94,71 @@ blocks execute only against closed-PATH stubs; no real Apple tools or 4D run.
 
 ---
 
+## Native ownership
+
+Dock's synchronous click invocations clear both their returned `PA_Variable`
+and their independently owned arguments after execution. The fallback method
+name starts in an Undefined variable before `PA_SetStringVariable` installs its
+owning descriptor: creating an empty string variable first would leak that
+empty allocation when the setter shallow-overwrites it.
+The SDK command helper's all-zero result on invocation-handle allocation
+failure is not a valid variable and is not passed to the variable clearer.
+
+The dormant `support/4DPlugin-JSON` helpers follow the same rule for string and
+picture inputs. Their reference/picture setters consume the supplied owner;
+their successful object/collection getters hand an owner to the caller, which
+must eventually call `PA_DisposeObject` / `PA_DisposeCollection`. Scalar getters
+copy the value before clearing the successful property result, including type
+mismatches. Failed property outputs are unspecified and are neither inspected
+nor cleared. Existing silent/default-return behavior is unchanged.
+
+The bundled SDK implementation, not the `v13`/`v14` header comments, defines the
+audited contract. At source baseline `4995a2ab8902e6b975137a1fdb959fefa6c08209`,
+`4DPluginAPI.c` has SHA-256
+`5bac571c5c4cafd280fa7f23d775458a23701287e8735be27d4a2190002f4e3f`
+(introduced in repository commit `18837da1ecc78c608e70f782c9ac2b1573ca3d2d`;
+no upstream SDK release identity is established). Accepted
+`PA_SetStringInArray` calls dispose the old element and transfer the supplied
+descriptor. Invalid type/index/data/null-descriptor calls do not consume it.
+`PA_GetStringInArray` is borrowed. The dormant `ARRAY_TEXT` wrapper copies inputs
+and creates an independent owner for every output; no disposal was removed.
+`PA_SetUnistring` / `PA_ReturnString` instead use the engine's content setter.
+
+The inventory covers `4DPlugin-Dock.cpp/.h`, `support/4DPlugin-JSON.cpp/.h`, every
+file in `4D Plugin API/Classes` (`ARRAY_TEXT`, `C_TEXT`, `C_BLOB`, `C_LONGINT`,
+`C_REAL`, `C_TYPES`), SDK headers/implementation/export definition, both projects,
+and both source/bundle manifests. Xcode compiles Dock, C_TEXT and the SDK only;
+the other wrappers and JSON helper are dormant, not called by selectors 1-8.
+Both manifests agree and declare scalar text/picture/integer commands, not
+text arrays. `FourDPackex` is the SDK entry/export and calls `PluginMain`.
+The legacy Visual Studio project lists Dock and the SDK but does not supply a
+Windows implementation of the AppKit-dependent plugin.
+
+On macOS, run the actual first-party sources and entire unchanged SDK under
+ASan/UBSan with an engine-boundary shim:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 .github/tests/test_ownership.py -v
+# The identical harness must fail on the immutable pre-fix source:
+PYTHONDONTWRITEBYTECODE=1 python3 .github/tests/test_ownership.py \
+  --source-ref 4995a2ab8902e6b975137a1fdb959fefa6c08209 -v
+```
+
+Fixtures check exact ASCII, BMP, supplementary and empty text; allocated and
+null empties; callback results/arguments and invocation-handle failure;
+successful, mismatched and failed getters; reference-handoff survival;
+borrowed copies; array replacement/shrink/clear and rejected transfers; and
+content setters through the actual export/dispatcher. Explicit
+string/handle/reference balances cover leaks because macOS LeakSanitizer is
+disabled. The old SDK's pointer-to-integer `NULL` initializer requires
+`-Wno-int-conversion` when compiling its unchanged C translation unit.
+No release build, Apple packaging/signing tool or 4D host is invoked.
+
+These are shim results, not real 4D or Windows certification. SDK-internal
+array-resize allocation failure can corrupt the element count and is deferred,
+not certified by normal-array coverage. Ambiguous SDK-only application-path,
+picture-data and pointer metadata ownership is not guessed or rewritten.
+
 ## Requirements & platform notes
 
 - **The plugin never raises a 4D error.** Every failure (an icon that cannot be decoded, an unreachable class, an invalid request ID) is silent: the command returns without effect. Check results yourself where it matters.
